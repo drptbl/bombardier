@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttpproxy"
 	"golang.org/x/net/http2"
 )
 
@@ -27,8 +28,8 @@ type clientOpts struct {
 	tlsConfig         *tls.Config
 	disableKeepAlives bool
 
-	headers     *headersList
-	url, method string
+	headers            *headersList
+	url, method, proxy string
 
 	body    *string
 	bodProd bodyStreamProducer
@@ -55,6 +56,19 @@ func newFastHTTPClient(opts *clientOpts) client {
 	}
 	c.host = u.Host
 	c.requestURI = u.RequestURI()
+
+	var dial fasthttp.DialFunc
+
+	if opts.proxy != "" {
+	   url_proxy := strings.Replace(opts.proxy, "https://", "", 1)
+	   url_proxy = strings.Replace(url_proxy, "http://", "", 1)
+       dial = fasthttpproxy.FasthttpHTTPDialer(url_proxy)
+	} else {
+       dial = fasthttpDialFunc(
+          opts.bytesRead, opts.bytesWritten,
+       )
+	}
+
 	c.client = &fasthttp.HostClient{
 		Addr:                          u.Host,
 		IsTLS:                         u.Scheme == "https",
@@ -63,9 +77,7 @@ func newFastHTTPClient(opts *clientOpts) client {
 		WriteTimeout:                  opts.timeout,
 		DisableHeaderNamesNormalizing: true,
 		TLSConfig:                     opts.tlsConfig,
-		Dial: fasthttpDialFunc(
-			opts.bytesRead, opts.bytesWritten,
-		),
+		Dial: dial,
 	}
 	c.headers = headersToFastHTTPHeaders(opts.headers)
 	c.method, c.body = opts.method, opts.body
@@ -132,11 +144,19 @@ type httpClient struct {
 
 func newHTTPClient(opts *clientOpts) client {
 	c := new(httpClient)
+
 	tr := &http.Transport{
 		TLSClientConfig:     opts.tlsConfig,
 		MaxIdleConnsPerHost: int(opts.maxConns),
 		DisableKeepAlives:   opts.disableKeepAlives,
 	}
+
+	if opts.proxy != "" {
+		url_i := url.URL{}
+		url_proxy, _ := url_i.Parse(opts.proxy)
+		tr.Proxy = http.ProxyURL(url_proxy)
+	}
+
 	tr.DialContext = httpDialContextFunc(opts.bytesRead, opts.bytesWritten)
 	if opts.HTTP2 {
 		_ = http2.ConfigureTransport(tr)
